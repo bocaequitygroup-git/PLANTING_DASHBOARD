@@ -326,7 +326,7 @@
       </div>
       <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Sign in</button>
     </form>
-    <details class="login-config">
+    <details class="login-config" id="loginConfig">
       <summary>Deployment settings</summary>
       <div class="field" style="margin-top:8px;">
         <label for="webAppUrl">Web app exec URL (Code_main.gs deployment)</label>
@@ -510,8 +510,29 @@
   // This file is its own deployment (same pattern as ManagerApp.html): it talks
   // to Code_main.gs's deployed Web App exec URL over fetch(), it does not run
   // google.script.run and is not served by that project's doGet().
+  //
+  // Where the exec URL comes from, in priority order:
+  //   1. ?exec=<url> on this page's address (handy for a one-off / shared link)
+  //   2. the URL saved in this browser from "Deployment settings"
+  //   3. DEFAULT_WEB_APP_URL below -- paste the "Ranch VPOS Script" /exec URL
+  //      here once and every device/browser that opens this file just works,
+  //      with nothing to type on the sign-in screen.
+  // Browser storage is per-browser AND per-hosting-origin, so on its own it
+  // comes up empty on a new device, an incognito window, or a different host --
+  // that is what produced "No web app URL configured". Storage access is also
+  // wrapped in try/catch because some embedded/sandboxed contexts block it.
+  var DEFAULT_WEB_APP_URL = ''; // e.g. 'https://script.google.com/macros/s/AKfy.../exec'
+
+  function readStoredUrl_() { try { return localStorage.getItem('nr_webapp_url') || ''; } catch (e) { return ''; } }
+  function writeStoredUrl_(u) { try { localStorage.setItem('nr_webapp_url', u); } catch (e) { /* storage blocked: fine, the URL just won't persist */ } }
+  function urlFromQuery_() {
+    try { var m = String(location.search || '').match(/[?&]exec=([^&]+)/); return m ? decodeURIComponent(m[1]).trim() : ''; }
+    catch (e) { return ''; }
+  }
+  function looksLikeExecUrl_(u) { return /^https:\/\/script\.google\.com\/(a\/[^\/]+\/)?macros\/s\/[^\/\s]+\/exec\/?(\?.*)?$/.test(u); }
+
   var CONFIG = {
-    WEB_APP_URL: localStorage.getItem('nr_webapp_url') || ''
+    WEB_APP_URL: urlFromQuery_() || readStoredUrl_() || DEFAULT_WEB_APP_URL
   };
 
   /* ===================== STATE ===================== */
@@ -533,7 +554,7 @@
     payload = payload || {};
     if (state.manager) payload.managerId = state.manager.workerId;
     if (!CONFIG.WEB_APP_URL) {
-      return Promise.reject(new Error('No web app URL configured. Open "Deployment settings" on the sign-in screen.'));
+      return Promise.reject(new Error('No web app URL configured. Paste your Apps Script /exec URL into "Deployment settings" below the sign-in button, then sign in again.'));
     }
     return fetch(CONFIG.WEB_APP_URL, {
       method: 'POST',
@@ -605,15 +626,24 @@
 
   /* ===================== LOGIN ===================== */
   $('webAppUrl').value = CONFIG.WEB_APP_URL;
+  // No URL known yet: show the settings field open instead of hiding it behind
+  // an error message that points at it.
+  if (!CONFIG.WEB_APP_URL) $('loginConfig').open = true;
   $('loginForm').addEventListener('submit', function(e){
     e.preventDefault();
     var url = $('webAppUrl').value.trim();
-    if (url) { CONFIG.WEB_APP_URL = url; localStorage.setItem('nr_webapp_url', url); }
-    var workerId = $('loginId').value.trim();
-    var pin = $('loginPin').value;
     var btn = $('loginBtn');
     var errBox = $('loginError');
     errBox.style.display = 'none';
+    if (url && !looksLikeExecUrl_(url)) {
+      errBox.textContent = 'That does not look like a deployed web app URL. It should be the "Web app" URL from Deploy \u2192 Manage deployments, ending in /exec (not /dev, and not the editor link).';
+      errBox.style.display = 'block';
+      $('loginConfig').open = true;
+      return;
+    }
+    if (url) { CONFIG.WEB_APP_URL = url; writeStoredUrl_(url); }
+    var workerId = $('loginId').value.trim();
+    var pin = $('loginPin').value;
     btn.disabled = true; btn.textContent = 'Signing in…';
     api('login', { workerId: workerId, pin: pin })
       .then(function(res){
